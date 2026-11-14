@@ -345,3 +345,16 @@ button { font: inherit; color: inherit; border: 0; background: none; cursor: poi
 @media (orientation: landscape) and (max-height: 500px) {
   .with-survey .res-card .row-label, .with-survey .res-card .bar { display: none; }
 }
+
+/* ---------- Modo Ritmo ---------- */
+.rt-event { position: absolute; left: 50%; top: 42%; transform: translate(-50%, -50%); z-index: 7; pointer-events: none; text-align: center; font-family: var(--display); color: var(--gold); text-shadow: 0 0 18px #000, 0 2px 0 #000; white-space: nowrap; }
+.rt-event b { display: block; font-size: clamp(30px, 7vw, 54px); letter-spacing: .06em; font-weight: 400; }
+.rt-event small { display: block; font-family: var(--body); font-size: 13px; color: var(--text); letter-spacing: 0; }
+.rt-event.show { animation: rtpop 2.2s ease-out both; }
+@keyframes rtpop { 0% { opacity: 0; transform: translate(-50%, -50%) scale(1.6); } 12% { opacity: 1; transform: translate(-50%, -50%) scale(1); } 80% { opacity: 1; } 100% { opacity: 0; } }
+body.ritmo .turn-banner { font-size: 22px; }
+body.ritmo .cmd { touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; overflow: hidden; }
+body.ritmo .cmd::after { content: ""; position: absolute; left: 0; bottom: 0; height: 100%; width: var(--cd, 0%); background: #000a; pointer-events: none; }
+body.ritmo .cmd.held { outline: 2px solid var(--ki); box-shadow: 0 0 18px #7fd4ff66; }
+body.ritmo .qte { touch-action: none; }
+.status.red { background: #dc2626; animation: blink .3s infinite alternate; }

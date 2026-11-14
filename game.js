@@ -10,6 +10,7 @@
   const rand = (a, b) => a + Math.random() * (b - a);
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   const SAVE_KEY = 'legado_proto_v1';
+  const RITMO = !!window.RUPTURA_RITMO;
 
   // ---------- Datos ----------
   const HERO_LOOK = { art: 'ren', aura: '#ff8a3d' };
@@ -50,7 +51,7 @@
   const rankOf = (lv) => RANKS[Math.min(RANKS.length - 1, Math.floor((lv - 1) / 2))];
 
   // ---------- Guardado ----------
-  const defaults = () => ({ level: 1, exp: 0, gold: 0, wins: 0, beaten: [], dojo: { golpe: 0, defensa: 0, nucleo: 0 }, tower: 0, hold: false, tut: false });
+  const defaults = () => ({ level: 1, exp: 0, gold: 0, wins: 0, beaten: [], dojo: { golpe: 0, defensa: 0, nucleo: 0 }, tower: 0, hold: false, tut: false, tutR: false });
   function load() {
     try { const s = JSON.parse(localStorage.getItem(SAVE_KEY)); if (s && typeof s.level === 'number') { const d = defaults(); const o = Object.assign(d, s); o.dojo = Object.assign(defaults().dojo, s.dojo || {}); if (s.tut === undefined) o.tut = (s.beaten || []).length > 0; return o; } } catch (e) { /* sin almacenamiento */ }
     return defaults();
@@ -223,6 +224,7 @@
     $('turn-banner').textContent = 'TURNO 1';
     if (rival.lines && !opts.retry) await showDialog(rival);
     if (rival.lines) log(`<b>${rival.name}:</b> ${rival.lines[rival.lines.length - 1][1]}`);
+    if (RITMO) { B.tut = null; await rtIntro(); rtStart(); return; }
     B.tut = !P.tut && !rival.tower && !rival.master ? { seen: {} } : null;
     if (B.tut) {
       await coach('Bienvenido a tu primer combate. Cada luchador tiene <b>Coraza</b> (barra morada) y <b>Núcleo</b> (barra grande). <b>Pierde quien vacía su Núcleo.</b>');
@@ -282,7 +284,7 @@
     $(x + '-cor-txt').textContent = f.broken ? 'ROTA' : Math.round(f.coraza);
     $(x + '-kai').style.width = clamp(f.kai / 100, 0, 1) * 100 + '%';
     $(x + '-kai-txt').textContent = Math.round(f.kai);
-    const st = f.broken ? ['RUPTURA', 'purple'] : f.stun ? ['ATURDIDO', ''] : f.guard ? ['GUARDIA', 'blue']
+    const st = f.act ? [f.act.kind === 'burst' ? '¡ESTALLIDO!' : '¡ATACA!', 'red'] : f.broken ? ['RUPTURA', 'purple'] : f.stun ? ['ATURDIDO', ''] : f.guard ? ['GUARDIA', 'blue']
       : f.charging ? ['CARGANDO', ''] : f.burn ? ['QUEMADURA', ''] : ['', ''];
     setStatus($(x + '-status'), st[0], st[1]);
   }
@@ -295,6 +297,7 @@
   }
 
   function canAct(act) {
+    if (RITMO) return rtCan(act);
     if (busy || !B) return false;
     const p = B.p;
     if (act === 'kick') return p.kai >= RULES.kickCost;
@@ -601,6 +604,353 @@
     renderBattle();
   }
 
+  // =====================================================================
+  // ---------- MODO RITMO: combate en tiempo real (versión a comparar) ----------
+  // Sin turnos: cada acción tiene recarga; Guardia y Cargar se mantienen pulsados.
+  // El rival avisa sus ataques (anillo): esquiva tocando el escenario, bloquea con Guardia
+  // o interrúmpelo con una Patada. Reloj de 60 s: si se acaba, gana quien tenga más Núcleo (%).
+  // =====================================================================
+  const RT = {
+    time: 60, strike: 4, strikeKai: 4, strikeCd: 0.6, kick: 10, kickCd: 1.6, kickStun: 0.25,
+    potionCd: 3, kaiRegen: 3, chargeRate: 30, brokenSec: 3, regenDelay: 3, regenRate: 5,
+    rStrike: 11, rHeavy: 24, rNucleo: 1.5,
+    solDrain: 1.2, boltEvery: 10, burnDps: 3, burnSec: 3, interruptStun: 1.2, counterWin: 1.2,
+  };
+  // Estilo de combate de cada rival (pesos de decisión y ritmo)
+  const STYLES = {
+    agresivo: { name: 'Agresivo', think: [0.5, 0.9], w: { strike: 6, heavy: 1.5, guard: 0.4, charge: 0.6 }, combo: 3, tele: 0.75 },
+    defensivo: { name: 'Defensivo', think: [0.7, 1.2], w: { strike: 3, heavy: 1, guard: 3, charge: 1 }, combo: 1, tele: 0.7, counter: true },
+    explosivo: { name: 'Explosivo', think: [0.8, 1.3], w: { strike: 2, heavy: 3, guard: 0.6, charge: 3 }, combo: 2, tele: 0.85 },
+  };
+  const STYLE_OF = { bandido: 'agresivo', lobo: 'defensivo', tigre: 'explosivo', matriarca: 'agresivo', guardian: 'defensivo', voltio: 'agresivo', abad: 'explosivo' };
+  const styleFor = (rv) => STYLES[STYLE_OF[rv.id] || STYLE_OF[rv.look && rv.look.art] || ['agresivo', 'defensivo', 'explosivo'][(rv.floor || 0) % 3]];
+  // Sucesos a mitad de combate: uno al azar por combate
+  const EVENTS = [
+    { id: 'lluvia', name: 'LLUVIA DE KAI', desc: 'Ambos ganáis +40 de Kai.', run: (p, r) => { p.kai = Math.min(100, p.kai + 40); r.kai = Math.min(100, r.kai + 40); } },
+    { id: 'temblor', name: 'TEMBLOR', desc: 'La tierra tiembla: ambas Corazas pierden 30.', run: (p, r) => [p, r].forEach((f) => { if (f.broken) return; f.coraza -= 30; if (f.coraza <= 0) { f.coraza = 0; f.broken = RT.brokenSec; } }) },
+    { id: 'furia', name: 'FURIA', desc: 'Tu rival acelera durante 8 segundos.', run: () => { B.rt.fast = 8; } },
+    { id: 'aliento', name: 'SEGUNDO ALIENTO', desc: 'Quien va perdiendo recompone su Coraza.', run: (p, r) => { const f = p.nucleo / p.nucleoMax <= r.nucleo / r.nucleoMax ? p : r; f.broken = 0; f.coraza = Math.max(f.coraza, f.corazaMax * 0.6); } },
+    { id: 'sobrecarga', name: 'SOBRECARGA', desc: 'Durante 8 segundos, todos los golpes hacen el doble.', run: () => { B.rt.dmgX = 8; } },
+  ];
+
+  function rtBanner(title, desc) {
+    const el = $('rt-event');
+    el.innerHTML = `<b>${title}</b>${desc ? `<small>${desc}</small>` : ''}`;
+    el.classList.remove('hidden', 'show'); void el.offsetWidth; el.classList.add('show');
+    clearTimeout(rtBanner.t); rtBanner.t = setTimeout(() => el.classList.add('hidden'), 2200);
+  }
+
+  // Anillo de aviso con cancelación (para poder interrumpir al rival)
+  function rtRing(dur) {
+    const box = $('dodge-qte'), ring = $('dodge-shrink');
+    let done = false, resolveFn, timer;
+    const promise = new Promise((res) => { resolveFn = res; });
+    box.classList.remove('hidden', 'result-good', 'result-bad');
+    ring.classList.remove('go'); void ring.offsetWidth;
+    ring.style.setProperty('--dur', dur + 'ms'); ring.classList.add('go');
+    const t0 = performance.now();
+    const finish = (res, quiet) => {
+      if (done) return; done = true; clearTimeout(timer);
+      box.removeEventListener('pointerdown', onTap);
+      if (quiet) { box.classList.add('hidden'); resolveFn(res); return; }
+      box.classList.add(res === 'miss' ? 'result-bad' : 'result-good');
+      setTimeout(() => box.classList.add('hidden'), 180);
+      resolveFn(res);
+    };
+    const onTap = (e) => {
+      e.preventDefault();
+      const t = (performance.now() - t0) / dur;
+      if (t >= 0.78 && t <= 1.12) finish('perfect'); else if (t >= 0.55) finish('good'); else finish('miss');
+    };
+    box.addEventListener('pointerdown', onTap);
+    timer = setTimeout(() => finish('miss'), dur * 1.12);
+    return { promise, cancel: () => finish('cancel', true) };
+  }
+
+  function rtCan(act) {
+    if (!B || !B.rt || B.rt.ended || B.rt.paused) return false;
+    const p = B.p, cd = B.rt.cd;
+    if (act === 'strike') return cd.strike <= 0;
+    if (act === 'kick') return cd.kick <= 0 && p.kai >= RULES.kickCost;
+    if (act === 'ultimate') return p.kai >= RULES.burstCost;
+    if (act === 'charge') return p.kai < 100;
+    if (act === 'potion') return cd.potion <= 0 && B.patches > 0 && !p.broken && p.coraza < p.corazaMax;
+    return true; // guard
+  }
+
+  function rtBreak(def, who) { def.broken = RT.brokenSec; return breakMsg(def, who); }
+
+  // ---- Acciones del jugador ----
+  async function rtPress(act) {
+    if (!rtCan(act)) return;
+    const { p, r } = B, rt = B.rt;
+    if (act === 'guard') { p.guard = true; p.charging = false; B.stats.guards++; Stage.guard('hero'); rt.guardFx = 0.7; return; }
+    if (act === 'charge') { p.charging = true; p.guard = false; Stage.charge('hero'); rt.chargeFx = 0.9; return; }
+    p.guard = false; if (p.charging) { p.charging = false; p.chargeEnd = rt.clock; }
+    if (act === 'potion') {
+      B.patches--; rt.cd.potion = RT.potionCd;
+      p.coraza = Math.min(p.corazaMax, p.coraza + RULES.patch); Stage.heal('hero', RULES.patch);
+      log(`Refuerzas tu Coraza: <b>+${RULES.patch}</b>.`); return;
+    }
+    if (act === 'ultimate') {
+      p.kai -= RULES.burstCost; B.stats.bursts++;
+      const rivalBurst = r.act && r.act.kind === 'burst';
+      if (rivalBurst || (r.kai >= RULES.burstCost && !r.stun && Math.random() < 0.6)) {
+        if (rivalBurst) r.act.ring.cancel(); else r.kai -= RULES.burstCost;
+        r.act = null;
+        rt.paused = true;
+        log(`¡Lanzas el <b>Estallido Kai</b> y ${B.rival.name} responde! ¡Choque de Núcleos!`);
+        await clash();
+        rt.paused = false; rt.next = rand(0.8, 1.2);
+        rtAfterHit();
+        return;
+      }
+      Stage.attack('hero', 'kick');
+      await wait(330);
+      if (rt.ended) return;
+      const d = burstOn(p, r);
+      if (d.broke) r.broken = RT.brokenSec;
+      r.lastHit = rt.clock;
+      Stage.hit('rival', d.shown, d);
+      log(`¡<b>Estallido Kai</b>! <b>${d.shown}</b>${where(d)}.` + (d.broke ? ' <b>¡RUPTURA!</b>' : ''));
+      if (r.act && r.act.kind !== 'burst') { r.act.ring.cancel(); r.act = null; r.stun = RT.interruptStun; }
+      rtAfterHit();
+      return;
+    }
+    // Golpe o Patada
+    const kick = act === 'kick';
+    if (kick) { p.kai -= RULES.kickCost; rt.cd.kick = RT.kickCd; } else rt.cd.strike = RT.strikeCd;
+    Stage.attack('hero', kick ? 'kick' : 'strike');
+    await wait(kick ? 360 : 290);
+    if (rt.ended || rt.paused) return;
+    if (B.sig === 'espejismo' && p.chargeEnd && rt.clock - p.chargeEnd < 1.5) {
+      p.chargeEnd = 0; Stage.fx('espejismo', 'rival');
+      B.stats.sigHits = (B.stats.sigHits || 0) + 1;
+      log(`♛ <b>Espejismo:</b> ${B.rival.name} leyó tu carga y esquiva.`); return;
+    }
+    const wasGuard = r.guard;
+    let scale = rt.dmgX > 0 ? 2 : 1;
+    const counter = p.counterT > 0; if (counter) { scale *= 1.5; p.counterT = 0; }
+    const d = strikeOn(p, r, (kick ? RT.kick : RT.strike) * (p.tech || 1), { scale });
+    r.lastHit = rt.clock;
+    Stage.hit('rival', d.shown, d);
+    if (!kick) p.kai = Math.min(100, p.kai + RT.strikeKai);
+    let msg = `${kick ? 'Patada' : 'Golpe'}${counter ? ' de castigo' : ''}: <b>${d.shown}</b>${where(d)}.`;
+    if (d.broke) msg += rtBreak(r, 'tu rival');
+    if (kick) {
+      if (r.act && r.act.kind !== 'burst') { r.act.ring.cancel(); r.act = null; r.stun = RT.interruptStun; msg += ' <b>¡Le interrumpes!</b>'; }
+      else if (Math.random() < RT.kickStun) { r.stun = 0.8; msg += ' ¡Aturdido!'; }
+      if (B.rule === 'fuego') { r.burnT = RT.burnSec; msg += ' Le quemas.'; }
+    }
+    if (B.sig === 'muro' && wasGuard && r.nucleo > 0 && !r.act) {
+      Stage.fx('muro', 'rival'); msg += ' ♛ <b>Muro de acero:</b> ¡contraataque!';
+      B.stats.sigHits = (B.stats.sigHits || 0) + 1;
+      rtRivalAttack('strike', 0.45);
+    } else if (rt.style.counter && wasGuard && !r.act && Math.random() < 0.5) rtRivalAttack('strike', 0.5);
+    log(msg);
+    rtAfterHit();
+  }
+  function rtRelease(act) {
+    if (!B || !B.rt) return;
+    if (act === 'guard') B.p.guard = false;
+    if (act === 'charge' && B.p.charging) { B.p.charging = false; B.p.chargeEnd = B.rt.clock; }
+  }
+
+  // ---- Rival ----
+  function rtRivalAttack(kind, teleOverride) {
+    const { p, r } = B, rt = B.rt;
+    const fast = rt.fast > 0 ? 0.75 : 1;
+    const tele = (teleOverride || (kind === 'burst' ? 1.1 : kind === 'heavy' ? rt.style.tele + 0.15 : rt.style.tele)) * fast * (rt.slowTut > 0 ? 1.6 : 1);
+    if (kind === 'heavy') r.kai -= RULES.kickCost;
+    if (kind === 'burst') r.kai -= RULES.burstCost;
+    r.guard = false; r.charging = false;
+    const ring = rtRing(tele * 1000);
+    r.act = { kind, ring };
+    $('r-status').textContent = kind === 'burst' ? '¡ESTALLIDO!' : '¡ATACA!'; $('r-status').className = 'status red';
+    if (kind === 'burst') log(`¡${B.rival.name} prepara su <b>Estallido</b>! Esquiva, o responde con el tuyo.`);
+    ring.promise.then(async (res) => {
+      if (res === 'cancel' || rt.ended) return;
+      r.act = null;
+      Stage.attack('rival', kind === 'strike' ? 'strike' : 'kick');
+      await wait(260);
+      if (rt.ended || rt.paused) return;
+      if (p.charging) B.stats.chargedHit++;
+      if (res === 'perfect') {
+        Stage.hit('hero', 0, { dodged: true, perfect: true });
+        p.kai = Math.min(100, p.kai + 15); B.perfect++; p.counterT = RT.counterWin;
+        log('¡Esquiva perfecta! <b>+15 Kai</b> y tu siguiente golpe castiga ×1,5.');
+      } else {
+        const scale = (res === 'good' ? 0.5 : 1) * (rt.dmgX > 0 ? 2 : 1);
+        const d = kind === 'burst' ? burstOn(r, p, scale) : strikeOn(r, p, kind === 'heavy' ? RT.rHeavy : RT.rStrike, { scale });
+        if (d.broke) p.broken = RT.brokenSec;
+        p.lastHit = rt.clock;
+        Stage.hit('hero', d.shown, d);
+        let msg = (res === 'good' ? 'Esquiva parcial: recibes ' : 'Recibes ') + `<b>${d.shown}</b>${d.wasBroken ? ' en el Núcleo' : ' en la Coraza'}${d.blocked ? ' (bloqueado)' : ''}.`;
+        if (d.broke) msg += breakMsg(p, 'Ren');
+        if (kind === 'heavy' && B.rule === 'fuego') { p.burnT = RT.burnSec; msg += ' Te quema.'; }
+        if (B.sig === 'brasas') { Stage.fx('brasas', 'hero'); p.burnT = RT.burnSec; r.kai = Math.min(100, r.kai + 10); msg += ' ♛ <b>Brasas</b>: te quema y gana Kai.'; B.stats.sigHits = (B.stats.sigHits || 0) + 1; }
+        log(msg);
+      }
+      if (rt.combo > 0 && !r.stun) { rt.combo--; rt.next = 0.2; } else rt.next = rand(...rt.style.think);
+      rtAfterHit();
+    });
+  }
+
+  function rtThink() {
+    const { p, r } = B, rt = B.rt, w = rt.style.w;
+    const smart = B.rival.ai || 0.5;
+    if (B.sig === 'doble' && rt.clock - rt.lastDouble > 7) {
+      rt.lastDouble = rt.clock; Stage.fx('doble', 'rival'); B.stats.sigHits = (B.stats.sigHits || 0) + 1;
+      log('♛ <b>Doble trueno:</b> ¡Voltio ataca dos veces!'); rt.combo = 1; return rtRivalAttack('strike', 0.55);
+    }
+    if (r.kai >= RULES.burstCost && Math.random() < 0.55 + 0.3 * smart * (p.broken ? 1 : 0)) return rtRivalAttack('burst');
+    const opts = { strike: w.strike, heavy: r.kai >= RULES.kickCost ? w.heavy * (p.broken ? 1 + smart : 1) : 0, guard: w.guard * (p.charging ? 0.2 : 1) * (r.broken ? 1 + smart : 1), charge: r.kai < 80 ? w.charge * (p.guard ? 1.5 : 1) : 0 };
+    if (B.rule === 'tormenta' && rt.boltT < 2.2) opts.guard += 6 * smart;
+    let x = Math.random() * Object.values(opts).reduce((a, b) => a + b, 0), pick = 'strike';
+    for (const [k, v] of Object.entries(opts)) { if ((x -= v) <= 0) { pick = k; break; } }
+    if (pick === 'guard') { r.guard = true; rt.rGuardT = rand(1.0, 1.8); Stage.guard('rival'); if (B.sig === 'muro') Stage.fx('muroGuard', 'rival'); return; }
+    if (pick === 'charge') { r.charging = true; rt.rChargeT = rand(1.0, 1.6); Stage.charge('rival'); return; }
+    rt.combo = pick === 'strike' ? Math.floor(Math.random() * rt.style.combo) : 0;
+    rtRivalAttack(pick);
+  }
+
+  // ---- Bucle ----
+  function rtAfterHit() { renderBattle(); rtCheck(); }
+  async function rtCheck() {
+    const { p, r } = B, rt = B.rt;
+    if (rt.ended) return;
+    if (p.nucleo > 0 && r.nucleo > 0 && rt.time > 0) return;
+    rt.ended = true;
+    if (r.act) { r.act.ring.cancel(); r.act = null; }
+    B.turn = Math.round(rt.clock);
+    if (p.nucleo <= 0 || r.nucleo <= 0) { checkEnd(); return; }
+    // Fin por tiempo
+    const pr = p.nucleo / p.nucleoMax, rr = r.nucleo / r.nucleoMax;
+    const won = B.mod === 'limite' ? false : pr > rr;
+    rtBanner('¡TIEMPO!', won ? 'Ganas por más Núcleo' : B.mod === 'limite' ? 'No lo venciste a tiempo' : 'Tu rival conserva más Núcleo');
+    log(`⏱ <b>¡Tiempo!</b> Tu Núcleo ${Math.round(pr * 100)}% · rival ${Math.round(rr * 100)}%.`);
+    Stage.ko(won ? 'rival' : 'hero');
+    await wait(1500);
+    showResult(won, won ? '' : 'tiempo');
+  }
+
+  function rtTick(now) {
+    if (!B || !B.rt || B.rt.ended) return;
+    const rt = B.rt, { p, r } = B;
+    const dt = Math.min(0.1, (now - rt.last) / 1000); rt.last = now;
+    if (!rt.paused) {
+      rt.clock += dt; rt.time -= dt;
+      for (const k in rt.cd) rt.cd[k] = Math.max(0, rt.cd[k] - dt);
+      ['fast', 'dmgX', 'slowTut'].forEach((k) => { if (rt[k] > 0) rt[k] -= dt; });
+      p.counterT = Math.max(0, (p.counterT || 0) - dt);
+      // Kai
+      if (!p.guard) p.kai = Math.min(100, p.kai + (RT.kaiRegen + (p.charging ? (B.rule === 'acero' ? RT.chargeRate / 2 : RT.chargeRate) : 0)) * dt);
+      if (!r.guard && !r.act) r.kai = Math.min(100, r.kai + (RT.kaiRegen + (r.charging ? RT.chargeRate : 0)) * dt);
+      if (p.guard && (rt.guardFx -= dt) <= 0) { Stage.guard('hero'); rt.guardFx = 0.7; }
+      if (p.charging) { if (p.kai >= 100) { p.charging = false; p.chargeEnd = rt.clock; } else if ((rt.chargeFx -= dt) <= 0) { Stage.charge('hero'); rt.chargeFx = 0.9; } }
+      // Coraza, quemaduras y regla del escenario
+      for (const f of [p, r]) {
+        if (f.broken > 0) { f.broken -= dt; if (f.broken <= 0) { f.broken = 0; f.coraza = RULES.rebuild; } }
+        else if (rt.clock - (f.lastHit || 0) > RT.regenDelay) f.coraza = Math.min(f.corazaMax, f.coraza + RT.regenRate * dt);
+        if (f.burnT > 0) { f.burnT -= dt; f.nucleo -= RT.burnDps * dt; }
+        if (B.rule === 'sol' && !f.broken) { f.coraza -= RT.solDrain * dt; if (f.coraza <= 0) { f.coraza = 0; f.broken = RT.brokenSec; if (f === p) B.stats.pBrokeTurn = B.stats.pBrokeTurn || 1; } }
+      }
+      if (rt.solFx !== undefined && (rt.solFx -= dt) <= 0) { Stage.fx('heat'); rt.solFx = 3; }
+      if (B.rule === 'tormenta') {
+        rt.boltT -= dt;
+        if (!rt.boltWarned && rt.boltT <= 2) { rt.boltWarned = true; log('⚡ El cielo se carga: <b>ponte en Guardia</b> para recibir el rayo (+30 Kai).'); }
+        if (rt.boltT <= 0) {
+          const lucky = [p, r].filter((f) => f.guard);
+          lucky.forEach((f) => { f.kai = Math.min(100, f.kai + 30); Stage.fx('bolt', f === p ? 'hero' : 'rival'); });
+          if (!lucky.length) Stage.fx('boltMiss');
+          log(lucky.length ? `⚡ Cae el rayo: +30 Kai a ${lucky.map((f) => (f === p ? 'Ren' : B.rival.name)).join(' y ')}.` : '⚡ Cae el rayo, pero nadie estaba en Guardia.');
+          rt.boltT = RT.boltEvery; rt.boltWarned = false;
+        }
+      }
+      // Suceso aleatorio
+      if (!rt.eventDone && rt.time <= rt.eventAt) {
+        rt.eventDone = true; rt.event.run(p, r);
+        rtBanner(rt.event.name, rt.event.desc); log(`✦ <b>${rt.event.name}:</b> ${rt.event.desc}`);
+        if (window.Sfx) Sfx.play('levelup');
+      }
+      // Rival
+      if (r.stun > 0) { r.stun -= dt; r.guard = false; r.charging = false; }
+      else if (!r.act) {
+        if (r.guard && (rt.rGuardT -= dt) <= 0) r.guard = false;
+        if (r.charging && (rt.rChargeT -= dt) <= 0) r.charging = false;
+        if (!r.guard && !r.charging && (rt.next -= dt * (rt.fast > 0 ? 1.4 : 1)) <= 0) { rt.next = rand(...rt.style.think); rtThink(); }
+      }
+      // Marcador
+      const s = Math.max(0, Math.ceil(rt.time));
+      $('turn-banner').textContent = `⏱ ${s}`;
+      $('turn-banner').classList.toggle('enemy', s <= 10);
+      if ((rt.ui -= dt) <= 0) { rt.ui = 0.08; renderBattle(); rtCooldowns(); }
+      if (p.nucleo <= 0 || r.nucleo <= 0 || rt.time <= 0) rtCheck();
+    }
+    requestAnimationFrame(rtTick);
+  }
+  function rtCooldowns() {
+    const rt = B.rt;
+    const total = { strike: RT.strikeCd, kick: RT.kickCd, potion: RT.potionCd };
+    document.querySelectorAll('.cmd').forEach((b) => {
+      const a = b.dataset.act;
+      b.style.setProperty('--cd', total[a] ? (rt.cd[a] / total[a]) * 100 + '%' : '0%');
+      b.classList.toggle('held', (a === 'guard' && B.p.guard) || (a === 'charge' && B.p.charging));
+    });
+    if (B.r.act || B.r.stun) return;
+    if (B.r.guard) { $('r-status').textContent = 'GUARDIA'; }
+  }
+
+  async function rtIntro() {
+    if (P.tutR) return;
+    B.tut = { seen: {} };
+    await coach('<b>MODO RITMO:</b> aquí no hay turnos. <b>Golpe</b> y <b>Patada</b> se recargan solos; <b>Guardia</b> y <b>Cargar</b> se <b>mantienen pulsados</b>. Tienes <b>60 segundos</b>.');
+    await coach('Cuando el rival vaya a atacar verás un <b>anillo</b>: <b>toca el escenario</b> al cerrarse para esquivar (y castigar ×1,5), mantén <b>Guardia</b>, o <b>interrúmpelo con una Patada</b>.');
+    B.tut = null; P.tutR = true; save(); glow(null);
+  }
+
+  function rtStart() {
+    const rt = B.rt = {
+      time: B.mod === 'limite' ? 40 : RT.time, clock: 0, last: performance.now(), cd: { strike: 0, kick: 0, potion: 0 },
+      style: styleFor(B.rival), next: 1.2, combo: 0, ended: false, paused: false, ui: 0,
+      boltT: RT.boltEvery, lastDouble: 0, fast: 0, dmgX: 0, guardFx: 0, chargeFx: 0, slowTut: P.wins < 1 ? 12 : 0,
+      event: EVENTS[Math.floor(Math.random() * EVENTS.length)],
+    };
+    rt.eventAt = rt.time * rand(0.4, 0.55);
+    $('charge-cost').textContent = 'MANTÉN';
+    $('guard-info').textContent = 'MANTÉN · ' + (B.rule === 'acero' ? '−80%' : '−60%') + ' daño';
+    if (B.rule === 'sol') rt.solFx = 1;
+    B.p.lastHit = B.r.lastHit = 0;
+    B.r.nucleo = B.r.nucleoMax = Math.round(B.r.nucleoMax * RT.rNucleo);
+    $('turn-banner').classList.remove('enemy');
+    log(`<b>${B.rival.name}</b> · estilo <b>${rt.style.name}</b>. ¡Lucha!`);
+    rtBanner('¡LUCHA!', `${rt.time} segundos · estilo ${rt.style.name.toLowerCase()}`);
+    busy = false;
+    renderBattle();
+    requestAnimationFrame(rtTick);
+  }
+
+  // Botones en modo ritmo: al pulsar (no al soltar); Guardia y Cargar mientras se mantienen
+  if (RITMO) {
+    document.querySelectorAll('.cmd').forEach((b) => {
+      const a = b.dataset.act;
+      b.addEventListener('pointerdown', (e) => { e.preventDefault(); rtPress(a); });
+      if (a === 'guard' || a === 'charge') ['pointerup', 'pointercancel', 'pointerleave'].forEach((ev) => b.addEventListener(ev, () => rtRelease(a)));
+      b.addEventListener('contextmenu', (e) => e.preventDefault());
+    });
+    const info = { strike: `${RT.strike} daño · +${RT.strikeKai} Kai · ${RT.strikeCd}s`, kick: `${RT.kick} daño · interrumpe`, charge: 'MANTÉN · +Kai, +25% daño', guard: 'MANTÉN · −60% daño', ultimate: '35 · 50 al Núcleo si hay ruptura' };
+    document.querySelectorAll('.cmd').forEach((b) => { const i = b.querySelector('.cmd-info'); if (info[b.dataset.act] && i && b.dataset.act !== 'potion') i.textContent = info[b.dataset.act]; });
+    $('charge-cost').textContent = 'MANTÉN';
+    const tl = document.querySelector('#res-turns'); if (tl && tl.previousElementSibling) tl.previousElementSibling.textContent = 'SEGUNDOS';
+    document.body.classList.add('ritmo');
+    const RR = { sol: 'El calor desgasta sin parar la Coraza de ambos.', acero: 'La Guardia para el 80% del daño, pero Cargar rinde la mitad.', tormenta: 'Cada 10 segundos cae un rayo: +30 Kai a quien esté en Guardia.', fuego: 'La Patada deja quemadura y el Estallido hace +30%.' };
+    SCHOOLS.forEach((sc) => { if (RR[sc.id]) sc.rule = RR[sc.id]; });
+    SIGS.doble.desc = 'Cada 7 segundos ataca dos veces seguidas.'; SIGS.doble.tip = 'Voltio lanza un doble ataque cada 7 segundos: mantén la Guardia cuando lo anuncie.';
+    SIGS.espejismo.desc = 'Si acabas de cargar Kai, esquiva tu siguiente ataque.';
+    SIGS.muro.tip = 'No golpees al Guardián mientras está en Guardia: carga Kai o espera a que la baje.';
+    MODS.limite.desc = 'Tienes 40 segundos para vencer o pierdes.';
+  }
+
   // ---------- Diálogo del maestro (3 frases, toca para avanzar) ----------
   function showDialog(rival) {
     return new Promise((resolve) => {
@@ -734,6 +1084,7 @@
   // Consejo concreto tras una derrota (GDD: «tu Núcleo se vació en el turno X…»)
   function defeatTip(reason) {
     const s = B.stats;
+    if (reason === 'tiempo' && RITMO && B.mod !== 'limite') return 'Se acabó el tiempo con menos Núcleo que tu rival. Rompe antes su Coraza con Patadas y castiga mientras esté rota; esquivar a tiempo te da golpes ×1,5.';
     if (reason === 'tiempo') return 'En Contrarreloj no hay tiempo para defenderse: rompe pronto la Coraza con Patadas y remata con el Estallido.';
     if (B.sig && (s.sigHits || 0) >= 2) return SIGS[B.sig].tip;
     if (reason === 'abandono') return 'Abandonar cuenta como derrota. Si vas mal, usa Guardia y un Parche para recomponer la Coraza.';
@@ -746,6 +1097,7 @@
   }
 
   function showResult(won, reason) {
+    if (B.rt) { B.turn = Math.round(B.rt.clock); B.rt.ended = true; if (B.r.act) { B.r.act.ring.cancel(); B.r.act = null; } $('dodge-qte').classList.add('hidden'); }
     const rv = B.rival;
     const exp = won ? rv.exp + B.perfect * 10 : Math.round(rv.exp * 0.25);
     const gold = won ? rv.gold : 0;
@@ -799,8 +1151,8 @@
 
   // ---------- Prueba con jugadores (encuesta + registro local; se envía a mano o a la base del enlace) ----------
   const Prueba = (() => {
-    const KEY = 'ruptura_prueba_v1';
-    const VERSION = '1.6';
+    const KEY = RITMO ? 'ruptura_prueba_ritmo' : 'ruptura_prueba_v1';
+    const VERSION = RITMO ? '2.0' : '1.6';
     const SURVEY_AT = (n) => n === 1 || n === 3 || n % 5 === 0;
     let T;
     let dbRef = null;
@@ -925,7 +1277,7 @@
   })();
 
   // ---------- Eventos ----------
-  document.querySelectorAll('.cmd').forEach((b) => b.addEventListener('click', () => playerAct(b.dataset.act)));
+  if (!RITMO) document.querySelectorAll('.cmd').forEach((b) => b.addEventListener('click', () => playerAct(b.dataset.act)));
   let lastWon = false;
   $('btn-retry').addEventListener('click', () => {
     const rv = B.rival;

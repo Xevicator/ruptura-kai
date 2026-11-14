@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#0d0e16">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <title>Ruptura Kai · Por turnos</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+
+  <!-- ============ HUB ============ -->
+  <section id="screen-hub" class="screen active">
+    <header class="topbar">
+      <div class="logo">RUPTURA<span>KAI</span></div>
+      <div class="pill gold">🪙 <b id="hub-gold">0</b></div>
+      <div class="pill">⚡ NV <b id="hub-level">1</b></div>
+      <button class="mute-btn" data-mute aria-label="Silenciar">🔊</button>
+    </header>
+
+    <div class="hub-body">
+      <div class="card hero-card">
+        <div class="tag">RANGO <span id="hub-rank">NOVATO</span></div>
+        <h1 id="hub-name">REN TAKAMURA</h1>
+        <p class="sub">Aprendiz sin escuela · Recorre las cuatro tierras</p>
+        <div class="row-label"><span>EXP SIGUIENTE NIVEL</span><span id="hub-exp-txt">0%</span></div>
+        <div class="bar"><i id="hub-exp" class="fill-exp"></i></div>
+        <div class="stats">
+          <div><small>NÚCLEO</small><b id="hub-hp">0</b></div>
+          <div><small>FUERZA</small><b id="hub-atk">0</b></div>
+          <div><small>CORAZA</small><b id="hub-ki">0</b></div>
+          <div><small>VICTORIAS</small><b id="hub-wins">0</b></div>
+        </div>
+      </div>
+
+      <div class="hub-modes">
+        <button id="btn-dojo" class="mode-btn"><b>DOJO</b><small>Mejora tus técnicas con oro</small></button>
+        <button id="btn-tower" class="mode-btn"><b>TORRE</b><small id="tower-sub">30 pisos de desafío</small></button>
+      </div>
+
+      <h2 class="section-title">MAPA DE LAS ESCUELAS</h2>
+      <div id="rival-list" class="rival-list"></div>
+
+      <div class="card howto">
+        <h3>CÓMO SE JUEGA</h3>
+        <ul>
+          <li>Cada luchador tiene <b>Coraza</b> y <b>Núcleo</b>. Pierde quien vacía su Núcleo.</li>
+          <li>Con la Coraza en pie solo pasa el <b>20%</b> del daño al Núcleo. <b>Rómpela</b> y recibirá ×1,5 durante 2 turnos.</li>
+          <li><b>Golpe</b> genera Kai. Con <b>100 Kai</b> lanzas el Estallido. Si los dos lo lanzáis, <b>Choque de Núcleos</b>: toca sin parar.</li>
+          <li>Cuando el rival ataca, <b>toca al cerrarse el anillo</b> para esquivar. Cada escuela tiene su <b>regla</b>.</li>
+        </ul>
+        <label class="toggle"><input type="checkbox" id="opt-hold"><span>Choque de Núcleos: <b>mantener pulsado</b> en vez de tocar sin parar</span></label>
+      </div>
+      <div class="card test-card">
+        <h3>PRUEBA ABIERTA</h3>
+        <p>Estás probando una versión temprana. Cuando hayas jugado un rato, envía tus resultados a quien te pasó el juego.</p>
+        <button id="btn-report" class="btn-secondary">ENVIAR MIS RESULTADOS</button>
+      </div>
+      <button id="btn-reset" class="link-btn">Reiniciar progreso</button>
+    </div>
+  </section>
+
+  <!-- ============ DOJO ============ -->
+  <section id="screen-dojo" class="screen">
+    <header class="topbar">
+      <button class="back-btn" data-back>‹ MAPA</button>
+      <div class="logo">DOJO</div>
+      <div class="pill gold">🪙 <b id="dojo-gold">0</b></div>
+    </header>
+    <div class="hub-body">
+      <p class="sub">Entrena con el oro de tus victorias. Cada rama tiene 3 rangos y se aplica en todos los combates.</p>
+      <div id="dojo-list" class="dojo-list"></div>
+    </div>
+  </section>
+
+  <!-- ============ TORRE ============ -->
+  <section id="screen-tower" class="screen">
+    <header class="topbar">
+      <button class="back-btn" data-back>‹ MAPA</button>
+      <div class="logo">TORRE</div>
+      <div class="pill">PISO <b id="tower-best">0</b>/30</div>
+    </header>
+    <div class="hub-body">
+      <div id="tower-next" class="card tower-next"></div>
+      <div id="tower-grid" class="tower-grid"></div>
+      <p class="sub">El escenario y su regla cambian cada 5 pisos. Cada quinto piso lo guarda un maestro.</p>
+    </div>
+  </section>
+
+  <!-- ============ BATALLA ============ -->
+  <section id="screen-battle" class="screen">
+    <div class="battle-layout">
+      <div class="stage-wrap">
+        <div id="stage"></div>
+
+        <!-- HUD rival -->
+        <div class="hud hud-rival">
+          <div class="hud-head">
+            <b id="r-name">RIVAL</b>
+            <span id="r-status" class="status"></span>
+          </div>
+          <div class="bar hp"><i id="r-nuc" class="fill-hp-rival"></i></div>
+          <div class="hud-row"><span>NÚCLEO</span><span id="r-nuc-txt">0/0</span></div>
+          <div class="duo">
+            <div><div class="bar thin"><i id="r-cor" class="fill-guard"></i></div><div class="hud-row small"><span>CORAZA</span><span id="r-cor-txt">0</span></div></div>
+            <div><div class="bar thin"><i id="r-kai" class="fill-ki"></i></div><div class="hud-row small"><span>KAI</span><span id="r-kai-txt">0</span></div></div>
+          </div>
+        </div>
+
+        <!-- HUD jugador -->
+        <div class="hud hud-hero">
+          <div class="hud-head">
+            <b id="p-name">REN</b>
+            <span id="p-status" class="status"></span>
+          </div>
+          <div class="bar hp"><i id="p-nuc" class="fill-hp"></i></div>
+          <div class="hud-row"><span>NÚCLEO</span><span id="p-nuc-txt">0/0</span></div>
+          <div class="duo">
+            <div><div class="bar thin"><i id="p-cor" class="fill-guard"></i></div><div class="hud-row small"><span>CORAZA</span><span id="p-cor-txt">0</span></div></div>
+            <div><div class="bar thin"><i id="p-kai" class="fill-ki"></i></div><div class="hud-row small"><span>KAI</span><span id="p-kai-txt">0</span></div></div>
+          </div>
+        </div>
+
+        <div id="turn-banner" class="turn-banner">TURNO 1</div>
+        <div id="rt-event" class="rt-event hidden"></div>
+
+        <!-- Tutorial -->
+        <div id="coach" class="coach hidden">
+          <div class="coach-box">
+            <small class="coach-tag">TUTORIAL</small>
+            <p id="coach-text"></p>
+            <div class="coach-actions"><button id="coach-skip" class="link-btn">Saltar tutorial</button><button id="coach-ok" class="btn-primary">ENTENDIDO</button></div>
+          </div>
+        </div>
+
+        <!-- QTE esquiva -->
+        <div id="dodge-qte" class="qte hidden">
+          <div class="dodge-ring"><div id="dodge-shrink" class="dodge-shrink"></div><div class="dodge-core">¡TOCA!</div></div>
+          <p>Toca cuando el anillo se cierre</p>
+        </div>
+
+        <!-- QTE choque de ráfagas -->
+        <div id="clash-qte" class="qte hidden">
+          <div class="clash-title">¡CHOQUE DE NÚCLEOS!</div>
+          <div class="clash-meter"><i id="clash-fill"></i><span id="clash-marker"></span></div>
+          <div class="clash-time"><i id="clash-time"></i></div>
+          <div class="clash-tap" id="clash-tap">TOCA SIN PARAR</div>
+        </div>
+      </div>
+
+      <div class="command-panel">
+        <div class="rule-chip" id="rule-chip"></div>
+        <div class="log" id="log">¡Comienza el combate!</div>
+        <div class="commands">
+          <button class="cmd" data-act="strike">
+            <span class="cmd-name">GOLPE RÁPIDO</span><span class="cmd-cost">GRATIS</span>
+            <span class="cmd-info">12 daño · +15 Kai</span>
+          </button>
+          <button class="cmd" data-act="kick">
+            <span class="cmd-name">PATADA FURIA</span><span class="cmd-cost">30 KAI</span>
+            <span class="cmd-info">25 daño · 30% aturdir</span>
+          </button>
+          <button class="cmd charge" data-act="charge">
+            <span class="cmd-name">CARGAR KAI</span><span class="cmd-cost" id="charge-cost">+40</span>
+            <span class="cmd-info">Recibes +25% daño</span>
+          </button>
+          <button class="cmd ultimate" data-act="ultimate">
+            <span class="cmd-name">ESTALLIDO KAI</span><span class="cmd-cost">100 KAI</span>
+            <span class="cmd-info">35 · 50 al Núcleo si hay ruptura</span>
+          </button>
+          <button class="cmd small" data-act="guard">
+            <span class="cmd-name">GUARDIA</span><span class="cmd-info" id="guard-info">−60% daño</span>
+          </button>
+          <button class="cmd small" data-act="potion">
+            <span class="cmd-name">PARCHE</span><span class="cmd-info">+20 Coraza · <b id="potions">x3</b></span>
+          </button>
+        </div>
+        <div class="panel-foot"><button id="btn-flee" class="link-btn">Abandonar</button><button class="mute-btn" data-mute aria-label="Silenciar">🔊</button></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ DIÁLOGO DEL MAESTRO ============ -->
+  <div id="dialog" class="dialog hidden">
+    <button id="dlg-skip" class="dlg-skip">Saltar diálogo ›</button>
+    <div class="dialog-box">
+      <div id="dlg-portrait" class="dlg-portrait"></div>
+      <div class="dlg-body">
+        <b id="dlg-name"></b>
+        <p id="dlg-text"></p>
+        <small id="dlg-hint">Toca para continuar</small>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ INFORME DE PRUEBA ============ -->
+  <div id="report" class="report hidden" role="dialog" aria-label="Enviar mis resultados">
+    <div class="card report-box">
+      <h3>TUS RESULTADOS</h3>
+      <p class="report-help">Envía este texto a quien te pasó el juego. No incluye datos personales.</p>
+      <textarea id="report-text" readonly rows="8"></textarea>
+      <div class="report-actions">
+        <button id="report-share" class="btn-primary">COMPARTIR</button>
+        <a id="report-wa" class="btn-secondary" target="_blank" rel="noopener">WHATSAPP</a>
+        <button id="report-copy" class="btn-secondary">COPIAR</button>
+      </div>
+      <p id="report-msg" class="report-help"></p>
+      <button id="report-close" class="link-btn">Cerrar</button>
+    </div>
+  </div>
+
+  <!-- ============ RESULTADO ============ -->
+  <section id="screen-result" class="screen">
+    <div class="result-body">
+      <div id="res-title" class="res-title">¡VICTORIA!</div>
+      <p id="res-sub" class="res-sub"></p>
+      <div class="card res-card">
+        <div class="res-line"><span>EXP</span><b id="res-exp">+0</b></div>
+        <div class="res-line"><span>ORO</span><b id="res-gold">+0</b></div>
+        <div class="res-line minor"><span>TURNOS</span><b id="res-turns">0</b></div>
+        <div class="res-line minor"><span>ESQUIVAS PERFECTAS</span><b id="res-dodges">0</b></div>
+        <p id="res-tip" class="res-tip hidden"></p>
+        <div class="row-label"><span>NIVEL <b id="res-level">1</b></span><span id="res-exp-txt"></span></div>
+        <div class="bar"><i id="res-expbar" class="fill-exp"></i></div>
+        <div id="res-levelup" class="levelup hidden"></div>
+      </div>
+      <div id="survey" class="card survey hidden">
+        <h4>TU OPINIÓN <small>3 toques · nos ayuda mucho</small></h4>
+        <div class="q" data-q="0"><span>¿Te está divirtiendo?</span><div class="opts"><button data-v="1">Poco</button><button data-v="2">Normal</button><button data-v="3">Mucho</button></div></div>
+        <div class="q" data-q="1"><span>¿Qué tal la dificultad?</span><div class="opts"><button data-v="1">Fácil</button><button data-v="2">Justa</button><button data-v="3">Difícil</button></div></div>
+        <div class="q" data-q="2"><span>¿Seguirías jugando?</span><div class="opts"><button data-v="1">No</button><button data-v="2">Quizá</button><button data-v="3">Sí</button></div></div>
+        <button id="survey-skip" class="link-btn">Ahora no</button>
+      </div>
+      <div class="res-actions">
+        <button id="btn-retry" class="btn-primary">REVANCHA</button>
+        <button id="btn-hub" class="btn-secondary">VOLVER AL MAPA</button>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script src="arte/assets.js"></script>
+<script src="vendor/phaser.min.js"></script>
+<script src="stage.js"></script>
+<script src="audio.js"></script>
+<script src="game.js"></script>
+</body>
+</html>
